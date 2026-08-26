@@ -6,6 +6,8 @@
 //
 //  1. POST {webui-url}/api/v1/chats/new       — creates the chat with the
 //     Discord message as the user turn and an empty assistant placeholder.
+//     NEVER retried: it is not idempotent (each call creates a brand new
+//     chat), so a retry here would leave duplicate chats behind.
 //  2. POST {webui-url}/api/chat/completions   — generates the actual model
 //     reply. Deliberately sent WITHOUT chat_id/id: per Open WebUI's docs,
 //     including both fields makes the server treat the caller as a live
@@ -14,10 +16,16 @@
 //     caller like this one (no WebSocket ever connected) surfaces to the
 //     end user as "Open WebUI: Server Connection Error" and leaves the
 //     chat's assistant message with a corrupted parentId. Omitting them
-//     gets the completion back synchronously over plain HTTP instead.
+//     gets the completion back synchronously over plain HTTP instead. This
+//     call has no persisted side effects in Open WebUI (it only returns
+//     text), so it is safe to retry a bounded number of times on failure —
+//     worst case a retry costs one extra upstream model call.
 //  3. POST {webui-url}/api/v1/chats/{id}      — writes the real reply text
 //     into the chat's message tree (both the flat `messages` array and
 //     `history.messages`) so it renders correctly in the Open WebUI UI.
+//     This sends the full, identical chat body each time, so retrying it
+//     converges to the same end state (idempotent full-resource replace)
+//     and is also safe to retry.
 //
 // See https://docs.openwebui.com/reference/api-flow/ and
 // https://docs.openwebui.com/reference/api-endpoints/ for the API this
@@ -106,6 +114,14 @@ type chatUpdateRequest struct {
 	Chat chatBody `json:"chat"`
 }
 
+// retryConfig bounds the retry-with-backoff helper used for the two
+// idempotent-in-effect steps (completion fetch, chat update). Chat creation
+// never uses this — see package doc comment.
+const (
+	maxRetries        = 3
+	retryInitialDelay = 500 * time.Millisecond
+)
+
 func main() {
 	token := flag.String("token", "", "Discord bot token (required)")
 	webUIURL := flag.String("webui-url", "", "Base URL of the Open WebUI instance, e.g. http://openwebui:8080 (required)")
@@ -180,10 +196,12 @@ func main() {
 	log.Println("discord-funnel: shutting down")
 }
 
-// createChat: create the chat (user message + empty assistant placeholder),
-// fetch a real completion synchronously over plain HTTP (no chat_id/id —
-// see package doc comment), then write the completed assistant message
-// back into the chat.
+// createChat: create the chat (user message + empty assistant placeholder,
+// exactly once — never retried), fetch a real completion synchronously
+// over plain HTTP (no chat_id/id — see package doc comment; retried on
+// failure since it has no persisted side effects), then write the
+// completed assistant message back into the chat (also retried, since
+// re-sending the identical full chat body is idempotent).
 func createChat(client *http.Client, baseURL, apiKey, model, authorName, channelID, discordMessageID, content string) {
 	userMsgID := newUUID()
 	assistantMsgID := newUUID()
@@ -229,6 +247,10 @@ func createChat(client *http.Client, baseURL, apiKey, model, authorName, channel
 		},
 	}
 
+	// Step 1: create the chat. Deliberately NOT retried — a retry here
+	// would create a second, duplicate chat for the same Discord message
+	// if the first request actually succeeded server-side but the response
+	// was lost (e.g. a client-side timeout).
 	var created chatsNewResponse
 	if err := postJSON(client, baseURL+"/api/v1/chats/new", apiKey, chatsNewRequest{Chat: body}, &created); err != nil {
 		log.Printf("discord-funnel: failed to create chat for discord message %s: %v", discordMessageID, err)
@@ -239,18 +261,30 @@ func createChat(client *http.Client, baseURL, apiKey, model, authorName, channel
 		return
 	}
 
+	// Step 2: fetch the completion. Safe to retry — this call never
+	// touches chat_id/id, so it has no persisted side effects in Open
+	// WebUI regardless of how many times it's attempted.
 	var completion completionsResponse
-	completionErr := postJSON(client, baseURL+"/api/chat/completions", apiKey, completionsRequest{
-		Messages: []completionMessage{{Role: "user", Content: content}},
-		Model:    model,
-		Stream:   false,
-	}, &completion)
+	var completionErr error
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		completionErr = postJSON(client, baseURL+"/api/chat/completions", apiKey, completionsRequest{
+			Messages: []completionMessage{{Role: "user", Content: content}},
+			Model:    model,
+			Stream:   false,
+		}, &completion)
+		if completionErr == nil {
+			break
+		}
+		log.Printf("discord-funnel: completion attempt %d/%d failed for discord message %s (chat %s): %v", attempt, maxRetries, discordMessageID, created.ID, completionErr)
+		if attempt < maxRetries {
+			time.Sleep(retryInitialDelay * time.Duration(1<<(attempt-1))) // 500ms, 1s, 2s...
+		}
+	}
 
 	replyContent := ""
 	done := true
 	if completionErr != nil {
-		log.Printf("discord-funnel: chat %s created but completion failed for discord message %s: %v", created.ID, discordMessageID, completionErr)
-		replyContent = fmt.Sprintf("(discord-funnel: failed to get a reply: %v)", completionErr)
+		replyContent = fmt.Sprintf("(discord-funnel: failed to get a reply after %d attempts: %v)", maxRetries, completionErr)
 	} else if len(completion.Choices) > 0 {
 		replyContent = completion.Choices[0].Message.Content
 	} else {
@@ -274,8 +308,22 @@ func createChat(client *http.Client, baseURL, apiKey, model, authorName, channel
 		},
 	}
 
-	if err := postJSON(client, baseURL+"/api/v1/chats/"+created.ID, apiKey, chatUpdateRequest{Chat: updateBody}, nil); err != nil {
-		log.Printf("discord-funnel: chat %s created and completion fetched but failed to persist reply for discord message %s: %v", created.ID, discordMessageID, err)
+	// Step 3: write the reply into the chat. Safe to retry — the request
+	// body is a full, identical resource replace each time, so re-sending
+	// it converges to the same end state.
+	var updateErr error
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		updateErr = postJSON(client, baseURL+"/api/v1/chats/"+created.ID, apiKey, chatUpdateRequest{Chat: updateBody}, nil)
+		if updateErr == nil {
+			break
+		}
+		log.Printf("discord-funnel: chat update attempt %d/%d failed for discord message %s (chat %s): %v", attempt, maxRetries, discordMessageID, created.ID, updateErr)
+		if attempt < maxRetries {
+			time.Sleep(retryInitialDelay * time.Duration(1<<(attempt-1)))
+		}
+	}
+	if updateErr != nil {
+		log.Printf("discord-funnel: chat %s created and completion fetched but failed to persist reply for discord message %s after %d attempts: %v", created.ID, discordMessageID, maxRetries, updateErr)
 		return
 	}
 
