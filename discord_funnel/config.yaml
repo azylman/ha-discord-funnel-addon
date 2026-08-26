@@ -1,0 +1,24 @@
+name: "Discord Funnel"
+version: "0.1.0"
+slug: "discord_funnel"
+description: "Relays a live feed of Discord messages to a configurable HTTP endpoint"
+url: "https://github.com/azylman/ha-discord-funnel-addon/tree/main/discord_funnel"
+arch:
+  - amd64
+  - aarch64
+  - armv7
+  - armhf
+  - i386
+init: false
+startup: services
+boot: auto
+watchdog: null
+map: []
+options:
+  discord_token: ""
+  api_url: ""
+  mentions_only: false
+schema:
+  discord_token: str
+  api_url: url
+  mentions_only: bool
