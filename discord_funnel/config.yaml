@@ -12,7 +12,6 @@ arch:
 init: false
 startup: services
 boot: auto
-watchdog: null
 map: []
 options:
   discord_token: ""
