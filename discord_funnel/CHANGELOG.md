@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.1
+
+- Fixed "Open WebUI: Server Connection Error" on every generated chat: the
+  completion request was including `chat_id`/`id`, which Open WebUI
+  interprets as "this caller has a live WebSocket, push the reply there"
+  — since discord-funnel never opens one, the push failed and also
+  corrupted the assistant message's `parentId`, producing the follow-on
+  "parent message not found" on retry.
+- Completions are now requested without `chat_id`/`id` (plain synchronous
+  HTTP), and the reply is written into the chat via a separate
+  `POST /api/v1/chats/{id}` update once we have it.
+
 ## 0.2.0
 
 - Replaced the generic webhook-POST behavior with Open WebUI backend chat
