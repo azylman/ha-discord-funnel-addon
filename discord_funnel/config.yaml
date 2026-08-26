@@ -1,5 +1,5 @@
 name: "Discord Funnel"
-version: "0.1.0"
+version: "0.1.1"
 slug: "discord_funnel"
 description: "Relays a live feed of Discord messages to a configurable HTTP endpoint"
 url: "https://github.com/azylman/ha-discord-funnel-addon/tree/main/discord_funnel"
