@@ -1,5 +1,5 @@
 name: "Discord Funnel"
-version: "0.2.1"
+version: "0.3.0"
 slug: "discord_funnel"
 description: "Creates a new Open WebUI chat for each live Discord message (or just mentions)"
 url: "https://github.com/azylman/ha-discord-funnel-addon/tree/main/discord_funnel"
