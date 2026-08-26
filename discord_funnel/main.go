@@ -1,15 +1,26 @@
 // Command discord-funnel connects to Discord as a bot, listens to the live
 // message feed, and for each message (or just messages that mention the
 // bot, depending on the --mentions-only flag) creates a brand new chat in
-// an Open WebUI instance and triggers a completion in it, using Open
-// WebUI's backend-controlled chat API:
+// an Open WebUI instance containing a real model reply, using Open WebUI's
+// backend chat API:
 //
-//  1. POST {webui-url}/api/v1/chats/new  — creates the chat with the
+//  1. POST {webui-url}/api/v1/chats/new       — creates the chat with the
 //     Discord message as the user turn and an empty assistant placeholder.
-//  2. POST {webui-url}/api/chat/completions — triggers the actual model
-//     reply inside that chat.
+//  2. POST {webui-url}/api/chat/completions   — generates the actual model
+//     reply. Deliberately sent WITHOUT chat_id/id: per Open WebUI's docs,
+//     including both fields makes the server treat the caller as a live
+//     WebUI browser tab and push the reply over that user's WebSocket
+//     instead of returning it in the HTTP response — which for a headless
+//     caller like this one (no WebSocket ever connected) surfaces to the
+//     end user as "Open WebUI: Server Connection Error" and leaves the
+//     chat's assistant message with a corrupted parentId. Omitting them
+//     gets the completion back synchronously over plain HTTP instead.
+//  3. POST {webui-url}/api/v1/chats/{id}      — writes the real reply text
+//     into the chat's message tree (both the flat `messages` array and
+//     `history.messages`) so it renders correctly in the Open WebUI UI.
 //
-// See https://docs.openwebui.com/reference/api-flow/ for the API this
+// See https://docs.openwebui.com/reference/api-flow/ and
+// https://docs.openwebui.com/reference/api-endpoints/ for the API this
 // mirrors.
 package main
 
@@ -74,13 +85,25 @@ type completionMessage struct {
 	Content string `json:"content"`
 }
 
+// completionsRequest deliberately omits chat_id/id/session_id — see the
+// package doc comment for why. This is the "plain API caller" shape that
+// gets the reply back synchronously in the HTTP response.
 type completionsRequest struct {
-	ChatID    string              `json:"chat_id"`
-	ID        string              `json:"id"`
-	Messages  []completionMessage `json:"messages"`
-	Model     string              `json:"model"`
-	Stream    bool                `json:"stream"`
-	SessionID string              `json:"session_id"`
+	Messages []completionMessage `json:"messages"`
+	Model    string              `json:"model"`
+	Stream   bool                `json:"stream"`
+}
+
+type completionsResponse struct {
+	Choices []struct {
+		Message struct {
+			Content string `json:"content"`
+		} `json:"message"`
+	} `json:"choices"`
+}
+
+type chatUpdateRequest struct {
+	Chat chatBody `json:"chat"`
 }
 
 func main() {
@@ -115,7 +138,7 @@ func main() {
 	// guild channels; DirectMessages covers DMs to the bot.
 	dg.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsMessageContent | discordgo.IntentsDirectMessages
 
-	httpClient := &http.Client{Timeout: 30 * time.Second}
+	httpClient := &http.Client{Timeout: 60 * time.Second}
 
 	dg.AddHandler(func(s *discordgo.Session, m *discordgo.MessageCreate) {
 		if m.Author == nil || (s.State != nil && s.State.User != nil && m.Author.ID == s.State.User.ID) {
@@ -157,15 +180,15 @@ func main() {
 	log.Println("discord-funnel: shutting down")
 }
 
-// createChat implements the two-step Open WebUI backend chat flow: create
-// the chat (user message + empty assistant placeholder), then trigger the
-// completion so the chat actually contains a model reply.
+// createChat: create the chat (user message + empty assistant placeholder),
+// fetch a real completion synchronously over plain HTTP (no chat_id/id —
+// see package doc comment), then write the completed assistant message
+// back into the chat.
 func createChat(client *http.Client, baseURL, apiKey, model, authorName, channelID, discordMessageID, content string) {
 	userMsgID := newUUID()
 	assistantMsgID := newUUID()
-	sessionID := newUUID()
 	now := time.Now().Unix()
-	done := false
+	notDone := false
 
 	userMsg := &message{
 		ID:          userMsgID,
@@ -184,7 +207,7 @@ func createChat(client *http.Client, baseURL, apiKey, model, authorName, channel
 		Model:       model,
 		ModelName:   model,
 		ModelIdx:    0,
-		Done:        &done,
+		Done:        &notDone,
 		Timestamp:   now + 1,
 	}
 
@@ -193,23 +216,21 @@ func createChat(client *http.Client, baseURL, apiKey, model, authorName, channel
 		title = title[:200]
 	}
 
-	reqBody := chatsNewRequest{
-		Chat: chatBody{
-			Title:    title,
-			Models:   []string{model},
-			Messages: []*message{userMsg, assistantMsg},
-			History: history{
-				CurrentID: assistantMsgID,
-				Messages: map[string]*message{
-					userMsgID:      userMsg,
-					assistantMsgID: assistantMsg,
-				},
+	body := chatBody{
+		Title:    title,
+		Models:   []string{model},
+		Messages: []*message{userMsg, assistantMsg},
+		History: history{
+			CurrentID: assistantMsgID,
+			Messages: map[string]*message{
+				userMsgID:      userMsg,
+				assistantMsgID: assistantMsg,
 			},
 		},
 	}
 
 	var created chatsNewResponse
-	if err := postJSON(client, baseURL+"/api/v1/chats/new", apiKey, reqBody, &created); err != nil {
+	if err := postJSON(client, baseURL+"/api/v1/chats/new", apiKey, chatsNewRequest{Chat: body}, &created); err != nil {
 		log.Printf("discord-funnel: failed to create chat for discord message %s: %v", discordMessageID, err)
 		return
 	}
@@ -218,17 +239,43 @@ func createChat(client *http.Client, baseURL, apiKey, model, authorName, channel
 		return
 	}
 
-	completionReq := completionsRequest{
-		ChatID:    created.ID,
-		ID:        assistantMsgID,
-		Messages:  []completionMessage{{Role: "user", Content: content}},
-		Model:     model,
-		Stream:    false,
-		SessionID: sessionID,
+	var completion completionsResponse
+	completionErr := postJSON(client, baseURL+"/api/chat/completions", apiKey, completionsRequest{
+		Messages: []completionMessage{{Role: "user", Content: content}},
+		Model:    model,
+		Stream:   false,
+	}, &completion)
+
+	replyContent := ""
+	done := true
+	if completionErr != nil {
+		log.Printf("discord-funnel: chat %s created but completion failed for discord message %s: %v", created.ID, discordMessageID, completionErr)
+		replyContent = fmt.Sprintf("(discord-funnel: failed to get a reply: %v)", completionErr)
+	} else if len(completion.Choices) > 0 {
+		replyContent = completion.Choices[0].Message.Content
+	} else {
+		log.Printf("discord-funnel: chat %s created but completion for discord message %s returned no choices", created.ID, discordMessageID)
+		replyContent = "(discord-funnel: model returned no response)"
 	}
 
-	if err := postJSON(client, baseURL+"/api/chat/completions", apiKey, completionReq, nil); err != nil {
-		log.Printf("discord-funnel: chat %s created but completion failed for discord message %s: %v", created.ID, discordMessageID, err)
+	assistantMsg.Content = replyContent
+	assistantMsg.Done = &done
+
+	updateBody := chatBody{
+		Title:    title,
+		Models:   []string{model},
+		Messages: []*message{userMsg, assistantMsg},
+		History: history{
+			CurrentID: assistantMsgID,
+			Messages: map[string]*message{
+				userMsgID:      userMsg,
+				assistantMsgID: assistantMsg,
+			},
+		},
+	}
+
+	if err := postJSON(client, baseURL+"/api/v1/chats/"+created.ID, apiKey, chatUpdateRequest{Chat: updateBody}, nil); err != nil {
+		log.Printf("discord-funnel: chat %s created and completion fetched but failed to persist reply for discord message %s: %v", created.ID, discordMessageID, err)
 		return
 	}
 
