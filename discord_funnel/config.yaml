@@ -1,7 +1,7 @@
 name: "Discord Funnel"
-version: "0.3.0"
+version: "0.4.0"
 slug: "discord_funnel"
-description: "Creates a new Open WebUI chat for each live Discord message (or just mentions)"
+description: "Forwards Discord messages to a target webhook or API using configurable Go templates"
 url: "https://github.com/azylman/ha-discord-funnel-addon/tree/main/discord_funnel"
 arch:
   - amd64
@@ -15,13 +15,11 @@ boot: auto
 map: []
 options:
   discord_token: ""
-  webui_url: ""
-  webui_api_key: ""
-  webui_model: ""
+  target_url: "http://b4a16ffd-gundam-brain:8080/api/prompt"
+  payload_template: ""
   mentions_only: false
 schema:
   discord_token: str
-  webui_url: url
-  webui_api_key: str
-  webui_model: str
+  target_url: url
+  payload_template: str?
   mentions_only: bool
