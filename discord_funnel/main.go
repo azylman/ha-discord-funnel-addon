@@ -143,6 +143,17 @@ func isBotTargeted(s *discordgo.Session, m *discordgo.MessageCreate) bool {
 		return true
 	}
 
+	// 6. Messages inside any Thread channel
+	if ch, err := s.State.Channel(m.ChannelID); err == nil && ch != nil {
+		if ch.IsThread() {
+			return true
+		}
+	} else if ch, err := s.Channel(m.ChannelID); err == nil && ch != nil {
+		if ch.IsThread() {
+			return true
+		}
+	}
+
 	return false
 }
 

@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.4.8
+- Auto-process all messages inside active Thread channels without requiring repetitive @-mentions.
+
 ## 0.4.7
 - Expanded target trigger matching: any mention, "gundam", "brain", "bot", inline thread replies, or direct messages.
 - Detailed content logging for ignored messages.
