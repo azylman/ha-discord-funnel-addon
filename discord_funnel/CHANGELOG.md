@@ -1,6 +1,7 @@
 # Changelog
 
-## 0.4.1
+## 0.4.2
+- Add `--target-url` flag alias.
 - Updated default message template to instruct agent to respond in a Discord thread via MCP.
 
 ## 0.4.0

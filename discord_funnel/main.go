@@ -150,6 +150,7 @@ func sendWithRetry(client *http.Client, targetURL string, payload []byte) error 
 func main() {
 	discordToken := flag.String("token", "", "Discord bot token")
 	targetURL := flag.String("target", "", "Target URL to POST payload to")
+	flag.StringVar(targetURL, "target-url", "", "Target URL to POST payload to (alias)")
 	tmplStr := flag.String("template", "", "Go text/template string for payload formatting")
 	mentionsOnly := flag.Bool("mentions-only", false, "Only process messages that mention the bot")
 	flag.Parse()
