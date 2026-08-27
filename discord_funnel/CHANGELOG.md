@@ -1,8 +1,8 @@
 # Changelog
 
-## 0.5.0
-- Added `is_thread` and `parent_id` detection to message data.
-- Updated default template to conditionally instruct agent to reply in existing threads via `discord_send` or create new threads for top-level messages via `discord_create_thread`.
+## 0.5.1
+- Moved thread vs reply decision logic entirely into the prompt template.
+- Default template instructs agent to use `discord_create_thread` only if not already part of a thread, otherwise use `discord_send`.
 
 ## 0.4.9
 - Updated default template instructions to explicitly direct the agent to create a thread and post its reply in the thread using `channelId` and `replyToMessageId`.

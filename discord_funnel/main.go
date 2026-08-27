@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	defaultTemplate = `{"prompt": "Here's a message someone sent you from Discord:\n\n{{range $k, $v := .}}- {{$k}}: {{$v | escapeJSON}}\n{{end}}\n{{if .is_thread}}Use the Discord MCP tools to post your reply in this thread (channelId: \"{{.channel_id}}\", replyToMessageId: \"{{.id}}\").{{else}}Use the Discord MCP tools to create a thread and post your reply in the thread for this message (channelId: \"{{.channel_id}}\", messageId: \"{{.id}}\").{{end}}"}`
+	defaultTemplate = `{"prompt": "Here's a message someone sent you from Discord:\n\n{{range $k, $v := .}}- {{$k}}: {{$v | escapeJSON}}\n{{end}}\nIf this message is not already part of a thread, use the Discord MCP discord_create_thread tool to create a thread and post your reply in the thread for this message (channelId: \"{{.channel_id}}\", messageId: \"{{.id}}\"). If you are already replying inside an existing thread (or if creating a thread indicates the channel is not a guild text/news channel), do not create a new thread; instead post your reply directly in the thread using the discord_send tool (channelId: \"{{.channel_id}}\", replyToMessageId: \"{{.id}}\")."}`
 	maxRetries      = 3
 	initialDelay    = 500 * time.Millisecond
 )
@@ -43,7 +43,7 @@ func toJSON(v any) string {
 	return string(b)
 }
 
-func buildMessageData(s *discordgo.Session, m *discordgo.Message) map[string]any {
+func buildMessageData(m *discordgo.Message) map[string]any {
 	data := make(map[string]any)
 
 	// Top-level Discord fields
@@ -57,20 +57,6 @@ func buildMessageData(s *discordgo.Session, m *discordgo.Message) map[string]any
 	data["tts"] = m.TTS
 	data["type"] = int(m.Type)
 	data["webhook_id"] = m.WebhookID
-
-	isThread := false
-	var parentID string
-	if s != nil {
-		if ch, err := s.State.Channel(m.ChannelID); err == nil && ch != nil {
-			isThread = ch.IsThread()
-			parentID = ch.ParentID
-		} else if ch, err := s.Channel(m.ChannelID); err == nil && ch != nil {
-			isThread = ch.IsThread()
-			parentID = ch.ParentID
-		}
-	}
-	data["is_thread"] = isThread
-	data["parent_id"] = parentID
 
 	if m.EditedTimestamp != nil {
 		data["edited_timestamp"] = m.EditedTimestamp.Format(time.RFC3339)
@@ -285,7 +271,7 @@ func main() {
 			return
 		}
 
-		data := buildMessageData(s, m.Message)
+		data := buildMessageData(m.Message)
 		var buf bytes.Buffer
 		if err := tmpl.Execute(&buf, data); err != nil {
 			log.Printf("discord-funnel: failed to execute template for message %s: %v", m.ID, err)
