@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/google/uuid"
 )
 
 const (
@@ -43,8 +44,29 @@ func toJSON(v any) string {
 	return string(b)
 }
 
-func buildMessageData(m *discordgo.Message) map[string]any {
+func generateConversationID(id string) string {
+	namespace := uuid.MustParse("6ba7b810-9dad-11d1-80b4-00c04fd430c8") // UUID Namespace DNS / standard namespace
+	return uuid.NewSHA1(namespace, []byte(id)).String()
+}
+
+func buildMessageData(s *discordgo.Session, m *discordgo.Message) map[string]any {
 	data := make(map[string]any)
+
+	// Check if channel is a thread
+	isThread := false
+	if s != nil {
+		if ch, err := s.State.Channel(m.ChannelID); err == nil && ch != nil {
+			isThread = ch.IsThread()
+		} else if ch, err := s.Channel(m.ChannelID); err == nil && ch != nil {
+			isThread = ch.IsThread()
+		}
+	}
+
+	if isThread {
+		data["conversation_id"] = generateConversationID(m.ChannelID)
+	} else {
+		data["conversation_id"] = generateConversationID(m.ID)
+	}
 
 	// Top-level Discord fields
 	data["id"] = m.ID
@@ -271,7 +293,7 @@ func main() {
 			return
 		}
 
-		data := buildMessageData(m.Message)
+		data := buildMessageData(s, m.Message)
 		var buf bytes.Buffer
 		if err := tmpl.Execute(&buf, data); err != nil {
 			log.Printf("discord-funnel: failed to execute template for message %s: %v", m.ID, err)
