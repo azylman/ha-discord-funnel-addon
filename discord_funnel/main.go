@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	defaultTemplate = `{"prompt": "Here's a message someone sent you from Discord:\n\n{{range $k, $v := .}}- {{$k}}: {{$v | escapeJSON}}\n{{end}}\nIf this message is not already part of a thread, use the Discord MCP discord_create_thread tool to create a thread and post your reply in the thread for this message (channelId: \"{{.channel_id}}\", messageId: \"{{.id}}\"). If you are already replying inside an existing thread (or if creating a thread indicates the channel is not a guild text/news channel), do not create a new thread; instead post your reply directly in the thread using the discord_send tool (channelId: \"{{.channel_id}}\", replyToMessageId: \"{{.id}}\").", "conversation_id": "{{.conversation_id}}"}`
+	defaultTemplate = `{"prompt": "Here's a message someone sent you from Discord:\n\n{{range $k, $v := .}}- {{$k}}: {{$v | escapeJSON}}\n{{end}}\nIf this message is not already part of a thread, use the Discord MCP discord_create_thread tool to create a thread and post your reply in the thread for this message (channelId: \"{{.channel_id}}\", messageId: \"{{.id}}\"). If you are already replying inside an existing thread (or if creating a thread indicates the channel is not a guild text/news channel), do not create a new thread; instead post your reply directly in the thread using the discord_send tool (channelId: \"{{.channel_id}}\").", "conversation_id": "{{.conversation_id}}"}`
 	maxRetries      = 3
 	initialDelay    = 500 * time.Millisecond
 )
