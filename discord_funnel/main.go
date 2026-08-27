@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	defaultTemplate = `{"prompt": "Here's a message someone sent you from Discord:\n\n{{range $k, $v := .}}- {{$k}}: {{$v | escapeJSON}}\n{{end}}\nUse the discord mcp to send a thread response to the message."}`
+	defaultTemplate = `{"prompt": "Here's a message someone sent you from Discord:\n\n{{range $k, $v := .}}- {{$k}}: {{$v | escapeJSON}}\n{{end}}\nUse the Discord MCP tools to create a thread and post your reply in the thread for this message (channelId: \"{{.channel_id}}\", replyToMessageId: \"{{.id}}\")."}`
 	maxRetries      = 3
 	initialDelay    = 500 * time.Millisecond
 )

@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.4.9
+- Updated default template instructions to explicitly direct the agent to create a thread and post its reply in the thread using `channelId` and `replyToMessageId`.
+
 ## 0.4.8
 - Auto-process all messages inside active Thread channels without requiring repetitive @-mentions.
 
