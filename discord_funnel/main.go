@@ -113,6 +113,56 @@ func buildMessageData(m *discordgo.Message) map[string]any {
 	return data
 }
 
+func isBotTargeted(s *discordgo.Session, m *discordgo.MessageCreate) bool {
+	// 1. Direct Messages
+	if m.GuildID == "" {
+		return true
+	}
+
+	if s.State.User == nil {
+		return true
+	}
+
+	botID := s.State.User.ID
+	botName := strings.ToLower(s.State.User.Username)
+
+	// 2. Structured user mentions
+	for _, user := range m.Mentions {
+		if user != nil && user.ID == botID {
+			return true
+		}
+	}
+
+	// 3. Raw text mentions (<@ID>, <@!ID>, @Username, or plain name)
+	contentLower := strings.ToLower(m.Content)
+	if strings.Contains(m.Content, "<@"+botID+">") || strings.Contains(m.Content, "<@!"+botID+">") {
+		return true
+	}
+	if strings.Contains(contentLower, "@"+botName) || strings.Contains(contentLower, botName) {
+		return true
+	}
+
+	// 4. Inline reply to a message created by the bot
+	if m.ReferencedMessage != nil && m.ReferencedMessage.Author != nil && m.ReferencedMessage.Author.ID == botID {
+		return true
+	}
+
+	// 5. Role mentions
+	for _, roleID := range m.MentionRoles {
+		if roleID != "" {
+			if member, err := s.State.Member(m.GuildID, botID); err == nil && member != nil {
+				for _, r := range member.Roles {
+					if r == roleID {
+						return true
+					}
+				}
+			}
+		}
+	}
+
+	return false
+}
+
 func sendWithRetry(client *http.Client, targetURL string, payload []byte) error {
 	var lastErr error
 	delay := initialDelay
@@ -216,23 +266,14 @@ func main() {
 
 	dg.AddHandler(func(s *discordgo.Session, m *discordgo.MessageCreate) {
 		// Ignore bot's own messages
-		if m.Author == nil || m.Author.ID == s.State.User.ID {
+		if m.Author == nil || (s.State.User != nil && m.Author.ID == s.State.User.ID) {
 			return
 		}
 
 		// Filter mentions if enabled
-		if *mentionsOnly {
-			mentioned := false
-			for _, user := range m.Mentions {
-				if user.ID == s.State.User.ID {
-					mentioned = true
-					break
-				}
-			}
-			if !mentioned {
-				log.Printf("discord-funnel: ignoring message %s (mentions_only enabled, no mention found)", m.ID)
-				return
-			}
+		if *mentionsOnly && !isBotTargeted(s, m) {
+			log.Printf("discord-funnel: ignoring message %s (mentions_only enabled, no mention/reply to bot found)", m.ID)
+			return
 		}
 
 		data := buildMessageData(m.Message)

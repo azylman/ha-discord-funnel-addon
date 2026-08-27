@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.4.6
+- Added comprehensive mention detection: support structured mentions, raw name/text mentions, thread message replies, direct messages, and role mentions.
+
 ## 0.4.5
 - Added gateway lifecycle handlers (Ready, Disconnect, Resumed) for enhanced connection diagnostics.
 - Enhanced message logging with channel ID, author, and content preview.

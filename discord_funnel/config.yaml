@@ -1,5 +1,5 @@
 name: "Discord Funnel"
-version: "0.4.5"
+version: "0.4.6"
 slug: "discord_funnel"
 description: "Forwards Discord messages to a target webhook or API using configurable Go templates"
 url: "https://github.com/azylman/ha-discord-funnel-addon/tree/main/discord_funnel"
@@ -17,7 +17,7 @@ options:
   discord_token: ""
   target_url: "http://b4a16ffd-gundam-brain:8080/api/prompt"
   payload_template: ""
-  mentions_only: false
+  mentions_only: true
 schema:
   discord_token: str
   target_url: url
