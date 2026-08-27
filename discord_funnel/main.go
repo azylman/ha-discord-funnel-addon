@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	defaultTemplate = `{"prompt": "Discord Message:\n{{range $k, $v := .}}- {{$k}}: {{$v | escapeJSON}}\n{{end}}"}`
+	defaultTemplate = `{"prompt": "Here's a message someone sent you from Discord:\n\n{{range $k, $v := .}}- {{$k}}: {{$v | escapeJSON}}\n{{end}}\nUse the discord mcp to send a thread response to the message."}`
 	maxRetries      = 3
 	initialDelay    = 500 * time.Millisecond
 )
@@ -64,6 +64,7 @@ func buildMessageData(m *discordgo.Message) map[string]any {
 		data["edited_timestamp"] = ""
 	}
 
+	// Author fields flattened
 	if m.Author != nil {
 		data["author_id"] = m.Author.ID
 		data["author_username"] = m.Author.Username
@@ -79,163 +80,177 @@ func buildMessageData(m *discordgo.Message) map[string]any {
 		}
 	}
 
+	// Mentions
+	var mentionNames, mentionIDs []string
+	for _, u := range m.Mentions {
+		if u != nil {
+			mentionNames = append(mentionNames, u.Username)
+			mentionIDs = append(mentionIDs, u.ID)
+		}
+	}
+	data["mentions"] = mentionNames
+	data["mention_ids"] = mentionIDs
+	data["mention_roles"] = m.MentionRoles
+
+	// Member details if present
 	if m.Member != nil {
 		data["member_nick"] = m.Member.Nick
 		data["member_roles"] = m.Member.Roles
+	} else {
+		data["member_nick"] = ""
+		data["member_roles"] = []string{}
 	}
-
-	// Mentions
-	var mentionUsernames []string
-	var mentionIDs []string
-	for _, u := range m.Mentions {
-		mentionUsernames = append(mentionUsernames, u.Username)
-		mentionIDs = append(mentionIDs, u.ID)
-	}
-	data["mentions"] = mentionUsernames
-	data["mention_ids"] = mentionIDs
-	data["mention_roles"] = m.MentionRoles
 
 	// Attachments
 	var attachmentURLs []string
 	for _, a := range m.Attachments {
-		attachmentURLs = append(attachmentURLs, a.URL)
+		if a != nil {
+			attachmentURLs = append(attachmentURLs, a.URL)
+		}
 	}
 	data["attachments"] = attachmentURLs
 
 	return data
 }
 
-func forwardMessage(client *http.Client, targetURL string, tmpl *template.Template, m *discordgo.Message) {
-	data := buildMessageData(m)
-
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		log.Printf("discord-funnel: template execution failed for message %s: %v", m.ID, err)
-		return
-	}
-
-	payload := buf.Bytes()
-
+func sendWithRetry(client *http.Client, targetURL string, payload []byte) error {
 	var lastErr error
+	delay := initialDelay
+
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		req, err := http.NewRequest(http.MethodPost, targetURL, bytes.NewReader(payload))
+		req, err := http.NewRequest("POST", targetURL, bytes.NewReader(payload))
 		if err != nil {
-			log.Printf("discord-funnel: failed to build HTTP request: %v", err)
-			return
+			return fmt.Errorf("failed to create request: %w", err)
 		}
 		req.Header.Set("Content-Type", "application/json")
 
 		resp, err := client.Do(req)
 		if err == nil {
 			defer resp.Body.Close()
-			respBody, _ := io.ReadAll(resp.Body)
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				log.Printf("discord-funnel: successfully forwarded message %s to %s (status %d)", m.ID, targetURL, resp.StatusCode)
-				return
+				log.Printf("discord-funnel: successfully forwarded message to %s (status %d)", targetURL, resp.StatusCode)
+				return nil
 			}
-			lastErr = fmt.Errorf("status %d: %s", resp.StatusCode, truncate(string(respBody), 200))
+			body, _ := io.ReadAll(resp.Body)
+			lastErr = fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
 		} else {
 			lastErr = err
 		}
 
-		log.Printf("discord-funnel: attempt %d/%d failed to forward message %s to %s: %v", attempt, maxRetries, m.ID, targetURL, lastErr)
+		log.Printf("discord-funnel: attempt %d/%d to %s failed: %v", attempt, maxRetries, targetURL, lastErr)
 		if attempt < maxRetries {
-			time.Sleep(initialDelay * time.Duration(1<<(attempt-1)))
+			time.Sleep(delay)
+			delay *= 2
 		}
 	}
 
-	log.Printf("discord-funnel: permanently failed to forward message %s after %d attempts: %v", m.ID, maxRetries, lastErr)
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
+	return fmt.Errorf("failed after %d attempts: %w", maxRetries, lastErr)
 }
 
 func main() {
-	token := flag.String("token", "", "Discord bot token (required)")
-	targetURL := flag.String("target-url", "", "Target URL to POST payload to (required)")
-	webUIURL := flag.String("webui-url", "", "Alias for target-url (for backwards compatibility)")
-	tmplStr := flag.String("template", defaultTemplate, "Go text/template for the request payload")
-	mentionsOnly := flag.Bool("mentions-only", false, "Only act on messages that mention the bot (default: act on every message)")
+	discordToken := flag.String("token", "", "Discord bot token")
+	targetURL := flag.String("target", "", "Target URL to POST payload to")
+	tmplStr := flag.String("template", "", "Go text/template string for payload formatting")
+	mentionsOnly := flag.Bool("mentions-only", false, "Only process messages that mention the bot")
 	flag.Parse()
 
-	if *token == "" {
-		log.Fatal("discord-funnel: --token is required")
+	if *discordToken == "" {
+		*discordToken = os.Getenv("DISCORD_TOKEN")
+	}
+	if *targetURL == "" {
+		*targetURL = os.Getenv("TARGET_URL")
+	}
+	if *tmplStr == "" {
+		*tmplStr = os.Getenv("PAYLOAD_TEMPLATE")
+	}
+	if *tmplStr == "" {
+		*tmplStr = defaultTemplate
 	}
 
-	finalURL := *targetURL
-	if finalURL == "" {
-		finalURL = *webUIURL
+	if *discordToken == "" {
+		log.Fatal("discord-funnel: Discord bot token is required")
 	}
-	if finalURL == "" {
-		log.Fatal("discord-funnel: --target-url is required")
-	}
-
-	rawTemplate := *tmplStr
-	if strings.TrimSpace(rawTemplate) == "" {
-		rawTemplate = defaultTemplate
+	if *targetURL == "" {
+		log.Fatal("discord-funnel: Target URL is required")
 	}
 
+	// Parse template with custom helpers
 	tmpl, err := template.New("payload").Funcs(template.FuncMap{
 		"escapeJSON": escapeJSON,
 		"json":       toJSON,
-		"toJson":     toJSON,
-		"quote":      func(v any) string { return fmt.Sprintf("%q", fmt.Sprint(v)) },
-		"upper":      strings.ToUpper,
-		"lower":      strings.ToLower,
-		"trim":       strings.TrimSpace,
-	}).Parse(rawTemplate)
+		"quote": func(s any) string {
+			return fmt.Sprintf("%q", fmt.Sprint(s))
+		},
+		"upper": func(s any) string {
+			return strings.ToUpper(fmt.Sprint(s))
+		},
+		"lower": func(s any) string {
+			return strings.ToLower(fmt.Sprint(s))
+		},
+		"trim": func(s any) string {
+			return strings.TrimSpace(fmt.Sprint(s))
+		},
+	}).Parse(*tmplStr)
 	if err != nil {
-		log.Fatalf("discord-funnel: invalid payload template: %v", err)
+		log.Fatalf("discord-funnel: invalid template: %v", err)
 	}
 
-	dg, err := discordgo.New("Bot " + *token)
+	dg, err := discordgo.New("Bot " + *discordToken)
 	if err != nil {
 		log.Fatalf("discord-funnel: failed to create Discord session: %v", err)
 	}
 
-	dg.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsMessageContent | discordgo.IntentsDirectMessages
-
-	httpClient := &http.Client{Timeout: 60 * time.Second}
+	client := &http.Client{Timeout: 15 * time.Second}
 
 	dg.AddHandler(func(s *discordgo.Session, m *discordgo.MessageCreate) {
-		if m.Author == nil || (s.State != nil && s.State.User != nil && m.Author.ID == s.State.User.ID) {
-			return // ignore our own messages
+		// Ignore bot's own messages
+		if m.Author == nil || m.Author.ID == s.State.User.ID {
+			return
 		}
 
-		isMention := m.MentionEveryone
-		if s.State != nil && s.State.User != nil {
-			for _, u := range m.Mentions {
-				if u.ID == s.State.User.ID {
-					isMention = true
+		// Filter mentions if enabled
+		if *mentionsOnly {
+			mentioned := false
+			for _, user := range m.Mentions {
+				if user.ID == s.State.User.ID {
+					mentioned = true
 					break
 				}
 			}
+			if !mentioned {
+				return
+			}
 		}
 
-		if *mentionsOnly && !isMention {
+		data := buildMessageData(m.Message)
+		var buf bytes.Buffer
+		if err := tmpl.Execute(&buf, data); err != nil {
+			log.Printf("discord-funnel: failed to execute template for message %s: %v", m.ID, err)
 			return
 		}
 
-		if m.Content == "" && len(m.Attachments) == 0 && len(m.Embeds) == 0 {
-			return
-		}
+		payload := buf.Bytes()
+		log.Printf("discord-funnel: processing message %s from %s (payload length %d bytes)", m.ID, m.Author.Username, len(payload))
 
-		go forwardMessage(httpClient, finalURL, tmpl, m.Message)
+		go func(msgID string, p []byte) {
+			if err := sendWithRetry(client, *targetURL, p); err != nil {
+				log.Printf("discord-funnel: error forwarding message %s: %v", msgID, err)
+			}
+		}(m.ID, payload)
 	})
+
+	dg.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsDirectMessages | discordgo.IntentMessageContent
 
 	if err := dg.Open(); err != nil {
 		log.Fatalf("discord-funnel: failed to open Discord session: %v", err)
 	}
 	defer dg.Close()
 
-	log.Printf("discord-funnel: connected to Discord, mentions_only=%v, forwarding messages to %s", *mentionsOnly, finalURL)
+	log.Printf("discord-funnel: connected to Discord, mentions_only=%t, forwarding messages to %s", *mentionsOnly, *targetURL)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
+
 	log.Println("discord-funnel: shutting down")
 }

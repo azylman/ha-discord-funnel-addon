@@ -1,10 +1,18 @@
 # Changelog
 
+## 0.4.1
+- Updated default message template to instruct agent to respond in a Discord thread via MCP.
+
 ## 0.4.0
-- Replaced Open WebUI-specific chat creation flow with generic target URL webhook forwarding.
-- Added Go `text/template` payload customization via `payload_template` option and `--template` flag.
-- Default template formats all Discord message keys and values suitable for `gundam-brain` server.
-- Automatic retry with exponential backoff on HTTP POST requests.
+- Refactored server into a generic HTTP forwarding engine decoupled from Open WebUI.
+- Added Go `text/template` support for dynamic JSON request formatting.
+- Added exponential backoff retry logic for webhook forwarding.
 
 ## 0.3.0
-- Initial release of Discord Funnel.
+- Model config option for Open WebUI.
+
+## 0.2.0
+- Add mentions_only option.
+
+## 0.1.0
+- Initial release of Discord Funnel Home Assistant add-on.
