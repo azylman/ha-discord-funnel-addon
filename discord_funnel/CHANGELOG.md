@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.7
+- Expanded target trigger matching: any mention, "gundam", "brain", "bot", inline thread replies, or direct messages.
+- Detailed content logging for ignored messages.
+
 ## 0.4.6
 - Added comprehensive mention detection: support structured mentions, raw name/text mentions, thread message replies, direct messages, and role mentions.
 

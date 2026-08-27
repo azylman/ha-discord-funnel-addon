@@ -119,45 +119,28 @@ func isBotTargeted(s *discordgo.Session, m *discordgo.MessageCreate) bool {
 		return true
 	}
 
-	if s.State.User == nil {
-		return true
-	}
-
-	botID := s.State.User.ID
-	botName := strings.ToLower(s.State.User.Username)
-
 	// 2. Structured user mentions
-	for _, user := range m.Mentions {
-		if user != nil && user.ID == botID {
-			return true
-		}
+	if len(m.Mentions) > 0 {
+		return true
 	}
 
-	// 3. Raw text mentions (<@ID>, <@!ID>, @Username, or plain name)
+	// 3. Raw content checks for mentions or bot names
 	contentLower := strings.ToLower(m.Content)
-	if strings.Contains(m.Content, "<@"+botID+">") || strings.Contains(m.Content, "<@!"+botID+">") {
-		return true
-	}
-	if strings.Contains(contentLower, "@"+botName) || strings.Contains(contentLower, botName) {
+	if strings.Contains(m.Content, "<@") ||
+		strings.Contains(contentLower, "gundam") ||
+		strings.Contains(contentLower, "brain") ||
+		strings.Contains(contentLower, "bot") {
 		return true
 	}
 
-	// 4. Inline reply to a message created by the bot
-	if m.ReferencedMessage != nil && m.ReferencedMessage.Author != nil && m.ReferencedMessage.Author.ID == botID {
+	// 4. Inline reply to any message in thread/channel
+	if m.ReferencedMessage != nil || m.MessageReference != nil {
 		return true
 	}
 
 	// 5. Role mentions
-	for _, roleID := range m.MentionRoles {
-		if roleID != "" {
-			if member, err := s.State.Member(m.GuildID, botID); err == nil && member != nil {
-				for _, r := range member.Roles {
-					if r == roleID {
-						return true
-					}
-				}
-			}
-		}
+	if len(m.MentionRoles) > 0 {
+		return true
 	}
 
 	return false
@@ -272,7 +255,8 @@ func main() {
 
 		// Filter mentions if enabled
 		if *mentionsOnly && !isBotTargeted(s, m) {
-			log.Printf("discord-funnel: ignoring message %s (mentions_only enabled, no mention/reply to bot found)", m.ID)
+			log.Printf("discord-funnel: ignoring message %s from %s: %q (mentions_only enabled, no trigger matched)",
+				m.ID, m.Author.Username, m.Content)
 			return
 		}
 
