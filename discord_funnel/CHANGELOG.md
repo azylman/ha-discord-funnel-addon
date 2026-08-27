@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.4.3
+- Refined default template instruction with explicit channel_id and send_message tool call.
+
 ## 0.4.2
 - Add `--target-url` flag alias.
 - Updated default message template to instruct agent to respond in a Discord thread via MCP.
