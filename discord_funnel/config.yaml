@@ -15,7 +15,7 @@ boot: auto
 map: []
 options:
   discord_token: ""
-  target_url: "http://b4a16ffd-gundam-brain:8080/api/prompt"
+  target_url: "http://192.168.1.14:8080/api/prompt"
   payload_template: ""
   mentions_only: true
 schema:
