@@ -175,7 +175,6 @@ func main() {
 		log.Fatal("discord-funnel: Target URL is required")
 	}
 
-	// Parse template with custom helpers
 	tmpl, err := template.New("payload").Funcs(template.FuncMap{
 		"escapeJSON": escapeJSON,
 		"json":       toJSON,
@@ -203,6 +202,18 @@ func main() {
 
 	client := &http.Client{Timeout: 15 * time.Second}
 
+	dg.AddHandler(func(s *discordgo.Session, r *discordgo.Ready) {
+		log.Printf("discord-funnel: gateway session ready as %s#%s (user ID %s)", r.User.Username, r.User.Discriminator, r.User.ID)
+	})
+
+	dg.AddHandler(func(s *discordgo.Session, d *discordgo.Disconnect) {
+		log.Printf("discord-funnel: gateway disconnected")
+	})
+
+	dg.AddHandler(func(s *discordgo.Session, r *discordgo.Resumed) {
+		log.Printf("discord-funnel: gateway session resumed")
+	})
+
 	dg.AddHandler(func(s *discordgo.Session, m *discordgo.MessageCreate) {
 		// Ignore bot's own messages
 		if m.Author == nil || m.Author.ID == s.State.User.ID {
@@ -219,6 +230,7 @@ func main() {
 				}
 			}
 			if !mentioned {
+				log.Printf("discord-funnel: ignoring message %s (mentions_only enabled, no mention found)", m.ID)
 				return
 			}
 		}
@@ -231,7 +243,8 @@ func main() {
 		}
 
 		payload := buf.Bytes()
-		log.Printf("discord-funnel: processing message %s from %s (payload length %d bytes)", m.ID, m.Author.Username, len(payload))
+		log.Printf("discord-funnel: processing message %s from %s (channel %s, payload length %d bytes): %q",
+			m.ID, m.Author.Username, m.ChannelID, len(payload), m.Content)
 
 		go func(msgID string, p []byte) {
 			if err := sendWithRetry(client, *targetURL, p); err != nil {
@@ -241,6 +254,7 @@ func main() {
 	})
 
 	dg.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsDirectMessages | discordgo.IntentMessageContent
+	dg.SyncEvents = false
 
 	if err := dg.Open(); err != nil {
 		log.Fatalf("discord-funnel: failed to open Discord session: %v", err)

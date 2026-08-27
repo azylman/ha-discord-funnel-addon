@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.5
+- Added gateway lifecycle handlers (Ready, Disconnect, Resumed) for enhanced connection diagnostics.
+- Enhanced message logging with channel ID, author, and content preview.
+
 ## 0.4.4
 - Set template to exact format requested for forwarding payload to Gundam Brain.
 
